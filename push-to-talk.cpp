@@ -63,20 +63,20 @@ void print_usage(const char* argv0) {
 
 std::optional<Config> parse_args(int argc, char** argv) {
     Config cfg;
-    const int max_u16 = static_cast<int>(std::numeric_limits<__u16>::max());
+    const int max_u16_value = static_cast<int>(std::numeric_limits<__u16>::max());
     for (int i = 1; i < argc; ++i) {
         std::string arg = argv[i];
         if (arg == "--input-device" && i + 1 < argc) {
             cfg.input_device = argv[++i];
         } else if (arg == "--input-keycode" && i + 1 < argc) {
             if (!parse_int(argv[++i], cfg.input_keycode) || cfg.input_keycode < 0 ||
-                cfg.input_keycode > KEY_MAX || cfg.input_keycode > max_u16) {
+                cfg.input_keycode > KEY_MAX || cfg.input_keycode > max_u16_value) {
                 std::cerr << "Invalid --input-keycode\n";
                 return std::nullopt;
             }
         } else if (arg == "--output-keycode" && i + 1 < argc) {
             if (!parse_int(argv[++i], cfg.output_keycode) || cfg.output_keycode < 0 ||
-                cfg.output_keycode > KEY_MAX || cfg.output_keycode > max_u16) {
+                cfg.output_keycode > KEY_MAX || cfg.output_keycode > max_u16_value) {
                 std::cerr << "Invalid --output-keycode\n";
                 return std::nullopt;
             }
@@ -257,7 +257,7 @@ int main(int argc, char** argv) {
         const size_t count = static_cast<size_t>(n / sizeof(input_event));
         for (size_t i = 0; i < count; ++i) {
             const input_event& ev = events[i];
-            if (ev.type != EV_KEY || ev.code != cfg.input_keycode) {
+            if (ev.type != EV_KEY || ev.code != static_cast<__u16>(cfg.input_keycode)) {
                 continue;
             }
             if (ev.value == 2) {

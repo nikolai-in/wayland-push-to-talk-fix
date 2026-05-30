@@ -3,5 +3,5 @@ Type=Application
 Terminal=false
 Name=Discord Push-to-Talk
 GenericName=Discord Push-to-Talk
-Comment=A workaround app that allows using push-to-talk keybinding in Discord on Wayland
-Exec=/usr/bin/push-to-talk /dev/input/by-id/<device-id>
+Comment=Native Wayland push-to-talk bridge for Discord
+Exec=/usr/bin/push-to-talk --input-device /dev/input/by-id/<device-id>

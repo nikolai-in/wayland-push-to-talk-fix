@@ -1,52 +1,82 @@
-# wayland-push-to-talk-fix
-This fixes the inability to use push to talk in Discord when running Wayland
+# wayland-push-to-talk
 
+Push-to-talk bridge for Linux Wayland that works with the native Discord Wayland client (not Xwayland).
 
-**NOTE: by default the left Meta (Windows) key is used for push to talk. In order to use a different key, see the configuration section below.**
+The app reads a key from a real input device (`/dev/input/event*`) and injects a synthetic key through a virtual keyboard created with `uinput`. Discord can bind to the injected key like any regular keyboard key.
 
-## Requirements
+## Features
 
-Nothing special.
-- C++ compiler & Make
-- libevdev
-- libxdo (Debian/Ubuntu: `libxdo-dev`, Fedora/Centos: `libxdo-devel`)
+- Native Wayland-compatible key injection via Linux `uinput`
+- Reads global key events directly from an input device
+- Hold-to-talk and toggle modes
+- Configurable input/output keycodes and polling interval
+- Optional exclusive input grab mode
 
-## Approach
+## Dependencies
 
-Read specific key events via evdev (needs sudo) and then pass them to libxdo to inject key presses to X apps.
+- Linux with `uinput`
+- A user allowed to read target `/dev/input/event*` device and write to `/dev/uinput`
+- `g++`
+- `make`
 
-# Configuration
-The command supports three command line args.
-- `-v`: verbose mode, logs all keystrokes
-- `-k`: keycode to listen for. [Full list](https://github.com/torvalds/linux/blob/master/include/uapi/linux/input-event-codes.h).
-- `-n`: keycode to send to discord. [Full list](https://github.com/xkbcommon/libxkbcommon/blob/master/include/xkbcommon/xkbcommon-keysyms.h) (ignore leading `XKB_KEY_`).
-- You can use mouse buttons as well for both options, you can determine the
-  correct keycode for `-k` using [evtest](https://cgit.freedesktop.org/evtest/).
-  The correct keycode for `-n` will be in the form of `MOUSE<num>` and you
-  can use [xev](https://gitlab.freedesktop.org/xorg/app/xev/) to determine
-  `<num>` for the particular button press that you are interested in.
+## Build
 
-# Installation
-
-## Manual run
-
-```
+```sh
 make
-sudo ./push-to-talk /dev/input/by-id/<device-id> &
+```
+
+Produces `./push-to-talk`.
+
+## Usage
+
+```sh
+./push-to-talk --input-device /dev/input/by-id/<your-keyboard> [options]
+```
+
+Options:
+
+- `--input-device PATH` (required) – input device to monitor
+- `--input-keycode N` (default: `84`) – keycode read from input device
+- `--output-keycode N` (default: `191`) – keycode injected via virtual keyboard
+- `--interval-ms N` (default: `10`) – poll interval
+- `--toggle` – toggles on each press (instead of hold-to-talk)
+- `--grab-input` – grabs the source device with `EVIOCGRAB` while running
+
+Example:
+
+```sh
+./push-to-talk --input-device /dev/input/by-id/usb-My_Keyboard-event-kbd --input-keycode 84 --output-keycode 191
+```
+
+## Discord setup
+
+1. Start `push-to-talk`.
+2. In Discord (Wayland native client), set Push-to-Talk to the same `--output-keycode` key.
+3. Test in a voice channel.
+
+Use `wev`, `evtest`, or `libinput debug-events` to discover keycodes for your setup.
+
+## Nix flake
+
+This repository now includes `flake.nix` with:
+
+- `packages.<system>.default` for the binary package
+- `apps.<system>.default` runnable app
+- `devShells.<system>.default` development shell
+
+Example:
+
+```sh
+nix run .# -- --input-device /dev/input/by-id/usb-My_Keyboard-event-kbd
 ```
 
 ## Autostart
 
-First edit the `push-to-talk.desktop` file and replace `/dev/input/by-id/<device-id>` with your device path. Then:
-```
-make
-sudo make install
+A sample desktop entry is provided at `push-to-talk.desktop`.
 
-# to allow you access `/dev/input` devices without root
-sudo usermod -aG input <your username>
-```
-Then just log out and log in. A process named `push-to-talk` should be running (visible in any process monitor).
+- Edit `Exec=` with your input device path and keycodes
+- Copy to `~/.config/autostart/`
 
-# License
+## License
 
-MIT
+MIT (see `LICENSE`).

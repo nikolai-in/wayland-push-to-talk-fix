@@ -49,15 +49,15 @@ bool parse_int(const std::string& s, int& out) {
 
 void print_usage(const char* argv0) {
     std::cerr
-        << "Usage: " << argv0 << " --input-device PATH [options]\\n"
-        << "Options:\\n"
-        << "  --input-device PATH  /dev/input/event* or /dev/input/by-id/* (required)\\n"
-        << "  --input-keycode N    linux keycode to watch on input device (default 84)\\n"
-        << "  --output-keycode N   linux keycode to inject via uinput (default 191)\\n"
-        << "  --interval-ms N      poll interval in ms (default 10)\\n"
-        << "  --toggle             toggle mode instead of hold-to-talk\\n"
-        << "  --grab-input         EVIOCGRAB the input device while running\\n"
-        << "  --help               show this help\\n";
+        << "Usage: " << argv0 << " --input-device PATH [options]\n"
+        << "Options:\n"
+        << "  --input-device PATH  /dev/input/event* or /dev/input/by-id/* (required)\n"
+        << "  --input-keycode N    linux keycode to watch on input device (default 84)\n"
+        << "  --output-keycode N   linux keycode to inject via uinput (default 191)\n"
+        << "  --interval-ms N      poll interval in ms (default 10)\n"
+        << "  --toggle             toggle mode instead of hold-to-talk\n"
+        << "  --grab-input         EVIOCGRAB the input device while running\n"
+        << "  --help               show this help\n";
 }
 
 std::optional<Config> parse_args(int argc, char** argv) {
@@ -68,17 +68,17 @@ std::optional<Config> parse_args(int argc, char** argv) {
             cfg.input_device = argv[++i];
         } else if (arg == "--input-keycode" && i + 1 < argc) {
             if (!parse_int(argv[++i], cfg.input_keycode) || cfg.input_keycode < 0 || cfg.input_keycode > KEY_MAX) {
-                std::cerr << "Invalid --input-keycode\\n";
+                std::cerr << "Invalid --input-keycode\n";
                 return std::nullopt;
             }
         } else if (arg == "--output-keycode" && i + 1 < argc) {
             if (!parse_int(argv[++i], cfg.output_keycode) || cfg.output_keycode < 0 || cfg.output_keycode > KEY_MAX) {
-                std::cerr << "Invalid --output-keycode\\n";
+                std::cerr << "Invalid --output-keycode\n";
                 return std::nullopt;
             }
         } else if (arg == "--interval-ms" && i + 1 < argc) {
             if (!parse_int(argv[++i], cfg.interval_ms) || cfg.interval_ms <= 0) {
-                std::cerr << "Invalid --interval-ms\\n";
+                std::cerr << "Invalid --interval-ms\n";
                 return std::nullopt;
             }
         } else if (arg == "--toggle") {
@@ -89,13 +89,13 @@ std::optional<Config> parse_args(int argc, char** argv) {
             print_usage(argv[0]);
             std::exit(0);
         } else {
-            std::cerr << "Unknown/invalid argument: " << arg << "\\n";
+            std::cerr << "Unknown/invalid argument: " << arg << "\n";
             return std::nullopt;
         }
     }
 
     if (cfg.input_device.empty()) {
-        std::cerr << "--input-device is required\\n";
+        std::cerr << "--input-device is required\n";
         return std::nullopt;
     }
 
@@ -181,13 +181,13 @@ int main(int argc, char** argv) {
 
     int input_fd = ::open(cfg.input_device.c_str(), O_RDONLY);
     if (input_fd < 0) {
-        std::cerr << "Failed to open input device: " << cfg.input_device << " (" << std::strerror(errno) << ")\\n";
+        std::cerr << "Failed to open input device: " << cfg.input_device << " (" << std::strerror(errno) << ")\n";
         return 1;
     }
 
     if (cfg.grab_input) {
         if (ioctl(input_fd, EVIOCGRAB, 1) < 0) {
-            std::cerr << "Failed to grab input device: " << std::strerror(errno) << "\\n";
+            std::cerr << "Failed to grab input device: " << std::strerror(errno) << "\n";
             ::close(input_fd);
             return 1;
         }
@@ -195,7 +195,7 @@ int main(int argc, char** argv) {
 
     int uinput_fd = open_uinput_device(cfg.output_keycode);
     if (uinput_fd < 0) {
-        std::cerr << "Failed to create uinput keyboard. Ensure uinput is loaded and permissions are set.\\n";
+        std::cerr << "Failed to create uinput keyboard. Ensure uinput is loaded and permissions are set.\n";
         if (cfg.grab_input) {
             (void)ioctl(input_fd, EVIOCGRAB, 0);
         }
@@ -211,7 +211,7 @@ int main(int argc, char** argv) {
               << " key " << cfg.input_keycode
               << " -> injecting key " << cfg.output_keycode
               << (cfg.toggle_mode ? " [toggle mode]" : " [hold mode]")
-              << "\\n";
+              << "\n";
 
     pollfd pfd{};
     pfd.fd = input_fd;
@@ -225,7 +225,7 @@ int main(int argc, char** argv) {
             if (errno == EINTR) {
                 continue;
             }
-            std::cerr << "poll failed: " << std::strerror(errno) << "\\n";
+            std::cerr << "poll failed: " << std::strerror(errno) << "\n";
             break;
         }
         if (ready == 0 || !(pfd.revents & POLLIN)) {
@@ -237,11 +237,11 @@ int main(int argc, char** argv) {
             if (errno == EAGAIN || errno == EINTR) {
                 continue;
             }
-            std::cerr << "read failed: " << std::strerror(errno) << "\\n";
+            std::cerr << "read failed: " << std::strerror(errno) << "\n";
             break;
         }
         if (n == 0) {
-            std::cerr << "input device closed\\n";
+            std::cerr << "input device closed\n";
             break;
         }
         if (n % static_cast<ssize_t>(sizeof(input_event)) != 0) {
@@ -273,10 +273,10 @@ int main(int argc, char** argv) {
             if (should_be_down != last_sent_down) {
                 if (!send_key_state(uinput_fd, cfg.output_keycode, should_be_down)) {
                     std::cerr << "Warning: failed to inject key "
-                              << cfg.output_keycode << (should_be_down ? " down" : " up") << "\\n";
+                              << cfg.output_keycode << (should_be_down ? " down" : " up") << "\n";
                 } else {
                     std::cout << "Injected key " << cfg.output_keycode
-                              << (should_be_down ? " down\\n" : " up\\n");
+                              << (should_be_down ? " down\n" : " up\n");
                     last_sent_down = should_be_down;
                 }
             }
@@ -290,7 +290,7 @@ int main(int argc, char** argv) {
 
     if (cfg.grab_input) {
         if (ioctl(input_fd, EVIOCGRAB, 0) < 0) {
-            std::cerr << "Warning: failed to release input grab: " << std::strerror(errno) << "\\n";
+            std::cerr << "Warning: failed to release input grab: " << std::strerror(errno) << "\n";
         }
     }
 

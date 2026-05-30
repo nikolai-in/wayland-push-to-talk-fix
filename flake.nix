@@ -16,7 +16,7 @@
           version = "0.1.0";
           src = ./.;
 
-          nativeBuildInputs = [ pkgs.gnumake pkgs.gcc ];
+          nativeBuildInputs = [ pkgs.gnumake ];
 
           buildPhase = ''
             runHook preBuild
@@ -38,7 +38,8 @@
         };
 
         devShells.default = pkgs.mkShell {
-          packages = [ pkgs.gnumake pkgs.gcc ];
+          inputsFrom = [ self.packages.${system}.default ];
+          packages = [ pkgs.gnumake ];
         };
       });
 }

@@ -199,7 +199,8 @@ int main(int argc, char** argv) {
 
     int uinput_fd = open_uinput_device(cfg.output_keycode);
     if (uinput_fd < 0) {
-        std::cerr << "Failed to create uinput keyboard. Ensure uinput is loaded and permissions are set.\n";
+        std::cerr << "Failed to create uinput keyboard. Ensure uinput is loaded and "
+                     "that your user can access /dev/uinput (or run with elevated privileges).\n";
         if (cfg.grab_input) {
             (void)ioctl(input_fd, EVIOCGRAB, 0);
         }
@@ -260,6 +261,7 @@ int main(int argc, char** argv) {
                 continue;
             }
             if (ev.value == 2) {
+                // Skip key repeat events.
                 continue;
             }
 

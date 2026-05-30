@@ -1,140 +1,299 @@
-#include <stdio.h>
+#include <chrono>
+#include <csignal>
+#include <cstdio>
+#include <cstring>
 #include <fcntl.h>
-#include <libevdev/libevdev.h>
-extern "C" {
-  #include <xdo.h> // Needed for simulating keyboard/mouse actions via X11
-}
+#include <linux/input.h>
+#include <linux/uinput.h>
+#include <poll.h>
+#include <sys/ioctl.h>
+#include <sys/types.h>
 #include <unistd.h>
-#include <string.h>
-#include <stdlib.h>
-#include <errno.h>
 
-int main(int argc, char **argv)
-{
-  struct libevdev *dev = NULL;   // libevdev device structure
-  xdo_t *xdo;                    // xdo object for sending key/mouse events
+#include <iostream>
+#include <optional>
+#include <string>
+#include <thread>
+#include <vector>
 
-  bool verbose = false;         // verbose output flag
-  const char* keycode = "KEY_LEFTMETA"; // default keycode to listen for
-  const char *keyname = "Super_L";      // default key to send
-  int button = 0;               
+namespace {
 
-  // Parse command-line options
-  int opt;
-  while ((opt = getopt(argc, argv, "vk:n:")) != -1) {
-    switch (opt) {
-      case 'v':
-        verbose = true;
-        break;
-      case 'k': // Set keycode to listen for (Linux input event code)
-        keycode = optarg;
-        break;
-      case 'n': // Set keyname (X11 keysym) or mouse button (e.g., MOUSE1)
-        if (optarg && strlen(optarg) >= 5 && !strncmp(optarg, "MOUSE", 5)) {
-          // Extract button number from "MOUSE<n>"
-          button = strtol((optarg + 5), NULL, 10);
+struct Config {
+    std::string input_device;
+    int input_keycode = 84;
+    int output_keycode = 191;
+    int interval_ms = 10;
+    bool toggle_mode = false;
+    bool grab_input = false;
+};
 
-          if (errno) {
-            perror("strtol");
-            exit(EXIT_FAILURE);
-          }
+volatile sig_atomic_t g_stop = 0;
+
+void on_signal(int) {
+    g_stop = 1;
+}
+
+bool parse_int(const std::string& s, int& out) {
+    try {
+        size_t pos = 0;
+        int v = std::stoi(s, &pos, 10);
+        if (pos != s.size()) {
+            return false;
         }
-        // If not mouse, treat as keysym name
-        keyname = optarg;
-        break;
-      default:
-        fprintf(stderr, "Usage: %s [-v] [-k keycode] [-n keyname] /dev/input/by-id/<device-name>\n", argv[0]);
-        exit(EXIT_FAILURE);
+        out = v;
+        return true;
+    } catch (...) {
+        return false;
     }
-  }
+}
 
-  // Make sure a device path was given
-  if (optind >= argc) {
-    fprintf(stderr, "Usage: %s [-v] [-k keycode] [-n keyname] /dev/input/by-id/<device-name>\n", argv[0]);
-    exit(EXIT_FAILURE);
-  }
+void print_usage(const char* argv0) {
+    std::cerr
+        << "Usage: " << argv0 << " --input-device PATH [options]\\n"
+        << "Options:\\n"
+        << "  --input-device PATH  /dev/input/event* or /dev/input/by-id/* (required)\\n"
+        << "  --input-keycode N    linux keycode to watch on input device (default 84)\\n"
+        << "  --output-keycode N   linux keycode to inject via uinput (default 191)\\n"
+        << "  --interval-ms N      poll interval in ms (default 10)\\n"
+        << "  --toggle             toggle mode instead of hold-to-talk\\n"
+        << "  --grab-input         EVIOCGRAB the input device while running\\n"
+        << "  --help               show this help\\n";
+}
 
-  // Open input device (e.g., /dev/input/by-id/...)
-  int fd = open(argv[optind], O_RDONLY);
-  if (fd < 0) {
-    perror("Failed to open device");
-    if (getuid() != 0)
-      fprintf(stderr, "Fix permissions to %s or run as root\n", argv[1]);
-    exit(1);
-  }
-
-  // Initialize libevdev from the file descriptor
-  int rc = libevdev_new_from_fd(fd, &dev);
-  if (rc < 0)
-  {
-    fprintf(stderr, "Failed to init libevdev (%s)\n", strerror(-rc));
-    exit(1);
-  }
-
-  // Print device information
-  fprintf(stderr, "Input device name: \"%s\"\n", libevdev_get_name(dev));
-  fprintf(stderr, "Input device ID: bus %#x vendor %#x product %#x\n",
-          libevdev_get_id_bustype(dev),
-          libevdev_get_id_vendor(dev),
-          libevdev_get_id_product(dev));
-
-  // Translate string keycode (e.g., "KEY_LEFTMETA") to internal code
-  int ev_keycode = libevdev_event_code_from_name(EV_KEY, keycode);
-  if (ev_keycode < 0) {
-    fprintf(stderr, "Key code not found\n");
-    fprintf(stderr, "see https://github.com/torvalds/linux/blob/master/include/uapi/linux/input-event-codes.h\n");
-    exit(1);
-  }
-
-  // Verify that the input device can generate this key
-  if (!libevdev_has_event_code(dev, EV_KEY, ev_keycode)) {
-    fprintf(stderr, "This device is not capable of sending this key code\n");
-    exit(1);
-  }
-
-  // Initialize xdo (used to send synthetic key/mouse events via X11)
-  xdo = xdo_new(NULL);
-  if (xdo == NULL) {
-    fprintf(stderr, "Failed to initialize xdo lib\n");
-    exit(1);
-  }
-
-  if (verbose) {
-    fprintf(stderr, "Listening for code %s, sending %s\n", libevdev_event_code_get_name(EV_KEY, ev_keycode), keyname);
-  }
-
-  // Main event loop: wait for key press/release
-  do {
-    struct input_event ev;
-
-    // Read the next input event
-    rc = libevdev_next_event(dev, LIBEVDEV_READ_FLAG_NORMAL, &ev);
-    if (rc != LIBEVDEV_READ_STATUS_SUCCESS)
-      continue;
-
-    // If event matches the one we're listening for, and is not auto-repeat
-    if (ev.type == EV_KEY && ev.code == ev_keycode && ev.value != 2) {
-      if (verbose)
-        fprintf(stderr, "key %s\n", ev.value ? "up" : "down");
-
-      if (ev.value == 1) { // Key press
-        if (!button)
-          xdo_send_keysequence_window_down(xdo, CURRENTWINDOW, keyname, 0);
-        else
-          xdo_mouse_down(xdo, CURRENTWINDOW, button);
-      } else {             // Key release
-        if (!button)
-          xdo_send_keysequence_window_up(xdo, CURRENTWINDOW, keyname, 0);
-        else
-          xdo_mouse_up(xdo, CURRENTWINDOW, button);
-      }
+std::optional<Config> parse_args(int argc, char** argv) {
+    Config cfg;
+    for (int i = 1; i < argc; ++i) {
+        std::string arg = argv[i];
+        if (arg == "--input-device" && i + 1 < argc) {
+            cfg.input_device = argv[++i];
+        } else if (arg == "--input-keycode" && i + 1 < argc) {
+            if (!parse_int(argv[++i], cfg.input_keycode) || cfg.input_keycode < 0 || cfg.input_keycode > KEY_MAX) {
+                std::cerr << "Invalid --input-keycode\\n";
+                return std::nullopt;
+            }
+        } else if (arg == "--output-keycode" && i + 1 < argc) {
+            if (!parse_int(argv[++i], cfg.output_keycode) || cfg.output_keycode < 0 || cfg.output_keycode > KEY_MAX) {
+                std::cerr << "Invalid --output-keycode\\n";
+                return std::nullopt;
+            }
+        } else if (arg == "--interval-ms" && i + 1 < argc) {
+            if (!parse_int(argv[++i], cfg.interval_ms) || cfg.interval_ms <= 0) {
+                std::cerr << "Invalid --interval-ms\\n";
+                return std::nullopt;
+            }
+        } else if (arg == "--toggle") {
+            cfg.toggle_mode = true;
+        } else if (arg == "--grab-input") {
+            cfg.grab_input = true;
+        } else if (arg == "--help") {
+            print_usage(argv[0]);
+            std::exit(0);
+        } else {
+            std::cerr << "Unknown/invalid argument: " << arg << "\\n";
+            return std::nullopt;
+        }
     }
-  } while (rc == LIBEVDEV_READ_STATUS_SYNC || rc == LIBEVDEV_READ_STATUS_SUCCESS || rc == -EAGAIN);
 
-  // Cleanup
-  xdo_free(xdo);
-  libevdev_free(dev);
-  close(fd);
+    if (cfg.input_device.empty()) {
+        std::cerr << "--input-device is required\\n";
+        return std::nullopt;
+    }
 
-  return 0;
+    return cfg;
+}
+
+bool write_event(int fd, __u16 type, __u16 code, __s32 value) {
+    input_event ev{};
+    ev.type = type;
+    ev.code = code;
+    ev.value = value;
+    ssize_t n = ::write(fd, &ev, sizeof(ev));
+    return n == static_cast<ssize_t>(sizeof(ev));
+}
+
+int open_uinput_device(int output_keycode) {
+    int fd = ::open("/dev/uinput", O_WRONLY | O_NONBLOCK);
+    if (fd < 0) {
+        fd = ::open("/dev/input/uinput", O_WRONLY | O_NONBLOCK);
+    }
+    if (fd < 0) {
+        return -1;
+    }
+
+    if (ioctl(fd, UI_SET_EVBIT, EV_KEY) < 0 ||
+        ioctl(fd, UI_SET_EVBIT, EV_SYN) < 0 ||
+        ioctl(fd, UI_SET_KEYBIT, output_keycode) < 0) {
+        ::close(fd);
+        return -1;
+    }
+
+    uinput_user_dev uidev{};
+    std::snprintf(uidev.name, UINPUT_MAX_NAME_SIZE, "wayland-push-to-talk");
+    uidev.id.bustype = BUS_USB;
+    uidev.id.vendor = 0x1;
+    uidev.id.product = 0x1;
+    uidev.id.version = 1;
+
+    if (::write(fd, &uidev, sizeof(uidev)) != static_cast<ssize_t>(sizeof(uidev))) {
+        ::close(fd);
+        return -1;
+    }
+
+    if (ioctl(fd, UI_DEV_CREATE) < 0) {
+        ::close(fd);
+        return -1;
+    }
+
+    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    return fd;
+}
+
+bool send_key_state(int uinput_fd, int keycode, bool down) {
+    return write_event(uinput_fd, EV_KEY, static_cast<__u16>(keycode), down ? 1 : 0) &&
+           write_event(uinput_fd, EV_SYN, SYN_REPORT, 0);
+}
+
+void destroy_uinput_device(int fd) {
+    if (fd >= 0) {
+        (void)ioctl(fd, UI_DEV_DESTROY);
+        ::close(fd);
+    }
+}
+
+void release_if_needed(int uinput_fd, int output_keycode, bool sent_down) {
+    if (sent_down) {
+        (void)send_key_state(uinput_fd, output_keycode, false);
+    }
+}
+
+}  // namespace
+
+int main(int argc, char** argv) {
+    std::signal(SIGINT, on_signal);
+    std::signal(SIGTERM, on_signal);
+
+    auto cfg_opt = parse_args(argc, argv);
+    if (!cfg_opt) {
+        print_usage(argv[0]);
+        return 2;
+    }
+    Config cfg = *cfg_opt;
+
+    int input_fd = ::open(cfg.input_device.c_str(), O_RDONLY);
+    if (input_fd < 0) {
+        std::cerr << "Failed to open input device: " << cfg.input_device << " (" << std::strerror(errno) << ")\\n";
+        return 1;
+    }
+
+    if (cfg.grab_input) {
+        if (ioctl(input_fd, EVIOCGRAB, 1) < 0) {
+            std::cerr << "Failed to grab input device: " << std::strerror(errno) << "\\n";
+            ::close(input_fd);
+            return 1;
+        }
+    }
+
+    int uinput_fd = open_uinput_device(cfg.output_keycode);
+    if (uinput_fd < 0) {
+        std::cerr << "Failed to create uinput keyboard. Ensure uinput is loaded and permissions are set.\\n";
+        if (cfg.grab_input) {
+            (void)ioctl(input_fd, EVIOCGRAB, 0);
+        }
+        ::close(input_fd);
+        return 1;
+    }
+
+    bool last_sent_down = false;
+    bool toggle_state = false;
+    bool input_key_down = false;
+
+    std::cout << "Monitoring " << cfg.input_device
+              << " key " << cfg.input_keycode
+              << " -> injecting key " << cfg.output_keycode
+              << (cfg.toggle_mode ? " [toggle mode]" : " [hold mode]")
+              << "\\n";
+
+    pollfd pfd{};
+    pfd.fd = input_fd;
+    pfd.events = POLLIN;
+
+    std::vector<input_event> events(32);
+
+    while (!g_stop) {
+        int ready = ::poll(&pfd, 1, cfg.interval_ms);
+        if (ready < 0) {
+            if (errno == EINTR) {
+                continue;
+            }
+            std::cerr << "poll failed: " << std::strerror(errno) << "\\n";
+            break;
+        }
+        if (ready == 0 || !(pfd.revents & POLLIN)) {
+            continue;
+        }
+
+        ssize_t n = ::read(input_fd, events.data(), events.size() * sizeof(input_event));
+        if (n < 0) {
+            if (errno == EAGAIN || errno == EINTR) {
+                continue;
+            }
+            std::cerr << "read failed: " << std::strerror(errno) << "\\n";
+            break;
+        }
+        if (n == 0) {
+            std::cerr << "input device closed\\n";
+            break;
+        }
+        if (n % static_cast<ssize_t>(sizeof(input_event)) != 0) {
+            continue;
+        }
+
+        const size_t count = static_cast<size_t>(n / sizeof(input_event));
+        for (size_t i = 0; i < count; ++i) {
+            const input_event& ev = events[i];
+            if (ev.type != EV_KEY || ev.code != cfg.input_keycode) {
+                continue;
+            }
+            if (ev.value == 2) {
+                continue;
+            }
+
+            const bool current_down = (ev.value != 0);
+            bool should_be_down = false;
+
+            if (cfg.toggle_mode) {
+                if (current_down && !input_key_down) {
+                    toggle_state = !toggle_state;
+                }
+                should_be_down = toggle_state;
+            } else {
+                should_be_down = current_down;
+            }
+
+            if (should_be_down != last_sent_down) {
+                if (!send_key_state(uinput_fd, cfg.output_keycode, should_be_down)) {
+                    std::cerr << "Warning: failed to inject key "
+                              << cfg.output_keycode << (should_be_down ? " down" : " up") << "\\n";
+                } else {
+                    std::cout << "Injected key " << cfg.output_keycode
+                              << (should_be_down ? " down\\n" : " up\\n");
+                    last_sent_down = should_be_down;
+                }
+            }
+
+            input_key_down = current_down;
+        }
+    }
+
+    release_if_needed(uinput_fd, cfg.output_keycode, last_sent_down);
+    destroy_uinput_device(uinput_fd);
+
+    if (cfg.grab_input) {
+        if (ioctl(input_fd, EVIOCGRAB, 0) < 0) {
+            std::cerr << "Warning: failed to release input grab: " << std::strerror(errno) << "\\n";
+        }
+    }
+
+    ::close(input_fd);
+    return g_stop ? 0 : 1;
 }
